@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#140e09">
+<title>당신의 문장</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&family=Nanum+Myeongjo:wght@400;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<style>
+  :root{--bg:#140e09;--paper:#efe3cb;--ink:#1a120c;--gold:#ffd27a;--muted:#b9a283;--red:#b1271c}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;min-height:100%;background:var(--bg);color:#eadbc0;font-family:"Nanum Myeongjo",serif}
+  body{min-height:100dvh;display:flex;flex-direction:column;align-items:center;padding:28px 18px calc(24px + env(safe-area-inset-bottom));
+       background:radial-gradient(120% 60% at 50% 18%,rgba(255,196,130,.28),rgba(255,196,130,0) 60%),var(--bg)}
+  header{text-align:center;margin-top:10px}
+  .sub{font-size:14px;letter-spacing:.12em;color:var(--muted)}
+  h1{font-family:"Nanum Brush Script",serif;font-weight:400;font-size:58px;line-height:1;margin:10px 0 6px;color:#f3e4c6;text-shadow:0 2px 20px rgba(255,190,110,.35)}
+  .lead{font-size:15px;color:var(--muted);line-height:1.6;margin:0}
+  main{width:100%;max-width:440px;margin-top:26px}
+  .paper{position:relative;background:var(--paper);border-radius:6px;padding:18px 18px 12px;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+  textarea{width:100%;border:0;outline:0;resize:none;background:transparent;color:var(--ink);
+           font-family:"Nanum Brush Script",serif;font-size:38px;line-height:1.25;min-height:150px}
+  textarea::placeholder{color:rgba(26,18,12,.35)}
+  .count{text-align:right;font-size:13px;color:#7a6650}
+  .count.full{color:var(--red)}
+  button{margin-top:18px;width:100%;height:62px;border:0;border-radius:6px;font-family:"Nanum Myeongjo",serif;font-weight:800;font-size:20px;letter-spacing:.1em;
+         color:#2a1a08;background:linear-gradient(180deg,#ffe3a3,#e9a94a);box-shadow:0 0 30px rgba(255,190,90,.35);transition:transform .1s,opacity .2s}
+  button:active{transform:scale(.98)}
+  button:disabled{opacity:.45;box-shadow:none}
+  #msg{min-height:48px;margin-top:16px;text-align:center;font-size:15px;line-height:1.5;color:var(--gold);transition:opacity .3s}
+  #msg.err{color:#ff9a86}
+  footer{margin-top:auto;padding-top:20px;font-size:12px;color:#7d6a52;display:flex;align-items:center;gap:8px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#777}
+  .sparkle{position:fixed;pointer-events:none;width:6px;height:6px;border-radius:50%;background:radial-gradient(#fff6d6,#ffc657 40%,rgba(255,160,50,0) 70%);}
+</style>
+</head>
+<body>
+<header>
+  <div class="sub">堂山 · 당산</div>
+  <h1>당신의 한 문장</h1>
+  <p class="lead">당산을 다시 세울 당신을 찾습니다.<br>남기고 싶은 말을 적어 벽에 새겨주세요.</p>
+</header>
+<main>
+  <div class="paper">
+    <textarea id="txt" rows="3" placeholder="여기에 적어주세요" enterkeyhint="send" autocomplete="off"></textarea>
+    <div class="count" id="count">0 / 30</div>
+  </div>
+  <button id="send" disabled>벽에 새기기</button>
+  <div id="msg"></div>
+</main>
+<footer><span class="dot" id="dot"></span><span id="state">연결 준비 중</span></footer>
+
+<script>
+const MAX=30, COOLDOWN=8;
+const BANNED=['씨발','시발','ㅅㅂ','ㅆㅂ','씹','병신','ㅂㅅ','븅신','개새','새끼','좆','존나','ㅈㄴ','미친놈','미친년','지랄','ㅈㄹ','애미','느금','fuck','shit','bitch'];
+const $=id=>document.getElementById(id);
+const txt=$('txt'), btn=$('send'), msg=$('msg'), count=$('count');
+const hostId=new URLSearchParams(location.search).get('id');
+let peer=null, conn=null, open=false, pending=null, coolUntil=0, composing=false, backoff=1500;
+
+function setState(t,c){$('state').textContent=t;$('dot').style.background=c;}
+function say(t,err){msg.textContent=t;msg.className=err?'err':'';}
+const len=s=>[...s].length;
+function normalize(s){return s.toLowerCase().replace(/[^0-9a-z가-힣ㄱ-ㅎㅏ-ㅣ]/g,'');}
+function clean(s){return s.replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim();}
+
+function update(){
+  if(!composing && len(txt.value)>MAX) txt.value=[...txt.value].slice(0,MAX).join('');
+  const n=Math.min(len(txt.value),MAX);
+  count.textContent=`${n} / ${MAX}`; count.classList.toggle('full',n>=MAX);
+  refreshBtn();
+}
+function refreshBtn(){
+  const left=Math.ceil(coolUntil-Date.now()/1000);
+  if(left>0){btn.disabled=true;btn.textContent=`${left}초 후 다시 새길 수 있어요`;return;}
+  btn.textContent='벽에 새기기';
+  btn.disabled=!clean(txt.value) || !hostId;
+}
+txt.addEventListener('compositionstart',()=>composing=true);
+txt.addEventListener('compositionend',()=>{composing=false;update();});
+txt.addEventListener('input',update);
+txt.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();send();}});
+btn.addEventListener('click',send);
+setInterval(refreshBtn,500);
+
+function send(){
+  if(btn.disabled)return;
+  const t=[...clean(txt.value)].slice(0,MAX).join('');
+  if(!t)return;
+  if(BANNED.some(b=>normalize(t).includes(b))){say('다른 표현으로 적어주세요.',true);return;}
+  pending=t; btn.disabled=true; say('벽으로 보내는 중…');
+  if(open) flush(); else connect();
+}
+function flush(){
+  if(!pending||!open)return;
+  try{conn.send({type:'msg',text:pending});}catch(e){open=false;connect();}
+}
+function sparkle(){
+  const r=btn.getBoundingClientRect();
+  for(let i=0;i<26;i++){
+    const s=document.createElement('div'); s.className='sparkle';
+    s.style.left=(r.left+Math.random()*r.width)+'px'; s.style.top=(r.top+r.height/2)+'px';
+    document.body.appendChild(s);
+    const dx=(Math.random()-.5)*120, dy=-(80+Math.random()*260);
+    s.animate([{transform:'translate(0,0) scale(1)',opacity:1},{transform:`translate(${dx}px,${dy}px) scale(.3)`,opacity:0}],
+      {duration:900+Math.random()*700,easing:'cubic-bezier(.2,.7,.3,1)'}).onfinish=()=>s.remove();
+  }
+}
+
+function connect(){
+  if(!hostId){setState('QR 코드로 다시 접속해주세요','#c33');return;}
+  if(typeof Peer==='undefined'){setState('인터넷 연결을 확인해주세요','#c33');return;}
+  setState('연결 중…','#c90');
+  if(!peer||peer.destroyed){
+    peer=new Peer({debug:1});
+    peer.on('open',()=>openConn());
+    peer.on('disconnected',()=>{setTimeout(()=>{if(!peer.destroyed)peer.reconnect();},1500);});
+    peer.on('error',e=>{
+      console.warn(e.type); open=false;
+      if(e.type==='peer-unavailable') setState('화면을 찾을 수 없어요 · 재시도 중','#c33');
+      else setState('연결 재시도 중…','#c90');
+      retry();
+    });
+  } else if(peer.open) openConn();
+}
+function openConn(){
+  if(conn){try{conn.close();}catch(e){}}
+  conn=peer.connect(hostId,{reliable:true});
+  conn.on('open',()=>{open=true;backoff=1500;setState('연결됨','#5c5');flush();});
+  conn.on('data',d=>{
+    if(!d)return;
+    if(d.type==='ok'){
+      pending=null; coolUntil=Date.now()/1000+COOLDOWN; txt.value=''; update();
+      say('당신의 문장이 벽에 새겨지고 있어요. 화면을 바라봐주세요.'); sparkle();
+    } else if(d.type==='wait'){
+      pending=null; coolUntil=Date.now()/1000+d.sec; say('잠시 후 다시 보내주세요.',true); refreshBtn();
+    } else if(d.type==='reject'){
+      pending=null; say(d.reason==='bad'?'다른 표현으로 적어주세요.':'문장을 적어주세요.',true); refreshBtn();
+    }
+  });
+  conn.on('close',()=>{open=false;setState('연결이 끊겼어요 · 재연결 중','#c90');retry();});
+  conn.on('error',()=>{open=false;retry();});
+}
+let retryTimer=null;
+function retry(){
+  if(retryTimer)return;
+  retryTimer=setTimeout(()=>{retryTimer=null;
+    if(peer&&!peer.destroyed&&peer.open) openConn(); else { if(peer)peer.destroy(); peer=null; connect(); }
+  },backoff);
+  backoff=Math.min(backoff*1.6,10000);
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!open)connect();});
+connect(); update();
+</script>
+</body>
+</html>
