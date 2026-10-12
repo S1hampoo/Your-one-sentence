@@ -59,12 +59,13 @@ const BANNED=['씨발','시발','ㅅㅂ','ㅆㅂ','씹','병신','ㅂㅅ','븅�
 const $=id=>document.getElementById(id);
 const txt=$('txt'), btn=$('send'), msg=$('msg'), count=$('count');
 const hostId=new URLSearchParams(location.search).get('id');
+let blockedQ=[];
 let peer=null, conn=null, open=false, pending=null, coolUntil=0, composing=false, backoff=1500;
 
 function setState(t,c){$('state').textContent=t;$('dot').style.background=c;}
 function say(t,err){msg.textContent=t;msg.className=err?'err':'';}
 const len=s=>[...s].length;
-function normalize(s){return s.toLowerCase().replace(/[^0-9a-z가-힣ㄱ-ㅎㅏ-ㅣ]/g,'');}
+function normalize(s){return s.toLowerCase().replace(/[^a-z가-힣ㄱ-ㅎㅏ-ㅣ]/g,'');} // 숫자·기호·공백을 빼고 비교 (시1발, 씨 발 등 우회 방지)
 function clean(s){return s.replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim();}
 
 function update(){
@@ -90,7 +91,12 @@ function send(){
   if(btn.disabled)return;
   const t=[...clean(txt.value)].slice(0,MAX).join('');
   if(!t)return;
-  if(BANNED.some(b=>normalize(t).includes(b))){say('다른 표현으로 적어주세요.',true);return;}
+  if(BANNED.some(b=>normalize(t).includes(b))){
+    say('다른 표현으로 적어주세요.',true);
+    // 휴대폰에서 막힌 욕설도 화면 쪽 통계(누적 욕설 차단)에 기록되도록 알림만 보냄 — 화면에는 표시되지 않음
+    try{ if(open) conn.send({type:'blocked',text:t}); else blockedQ.push(t); }catch(e){ blockedQ.push(t); }
+    return;
+  }
   pending=t; btn.disabled=true; say('벽으로 보내는 중…');
   if(open) flush(); else connect();
 }
@@ -129,7 +135,7 @@ function connect(){
 function openConn(){
   if(conn){try{conn.close();}catch(e){}}
   conn=peer.connect(hostId,{reliable:true});
-  conn.on('open',()=>{open=true;backoff=1500;setState('연결됨','#5c5');flush();});
+  conn.on('open',()=>{open=true;backoff=1500;setState('연결됨','#5c5');while(blockedQ.length){try{conn.send({type:'blocked',text:blockedQ.shift()});}catch(e){break;}}flush();});
   conn.on('data',d=>{
     if(!d)return;
     if(d.type==='ok'){
